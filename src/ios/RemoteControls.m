@@ -12,24 +12,46 @@
 @implementation RemoteControls
 
 static RemoteControls *remoteControls = nil;
+static UIImage *_image;
+static NSString *_artist;
+static NSString *_title;
+static NSString *_album;
+static NSString *_cover;
+static NSNumber *_elapsed;
+static NSNumber *_duration;
 
 - (void)pluginInitialize
 {
-    NSLog(@"RemoteControls plugin init.");
-    [[UIApplication sharedApplication] beginReceivingRemoteControlEvents];
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(receiveRemoteEvent:) name:@"receivedEvent" object:nil];
-
+    MPRemoteCommandCenter *commandCenter = [MPRemoteCommandCenter sharedCommandCenter];
+    
+    [commandCenter.pauseCommand addTarget:self action:@selector(onPause:)];
+    [commandCenter.nextTrackCommand addTarget:self action:@selector(onNextTrack:)];
+    [commandCenter.previousTrackCommand addTarget:self action:@selector(onPreviousTrack:)];
+    
 }
+
+- (void)onPause:(MPRemoteCommandHandlerStatus*)event { [self sendEvent:@"pause"]; }
+- (void)onNextTrack:(MPRemoteCommandHandlerStatus*)event { [self sendEvent:@"nextTrack"]; }
+- (void)onPreviousTrack:(MPRemoteCommandHandlerStatus*)event { [self sendEvent:@"previousTrack"]; }
 
 - (void)updateMetas:(CDVInvokedUrlCommand*)command
 {
+    NSLog(@"updateMetas");
+    
     NSString *artist = [command.arguments objectAtIndex:0];
     NSString *title = [command.arguments objectAtIndex:1];
     NSString *album = [command.arguments objectAtIndex:2];
     NSString *cover = [command.arguments objectAtIndex:3];
     NSNumber *duration = [command.arguments objectAtIndex:4];
     NSNumber *elapsed = [command.arguments objectAtIndex:5];
-
+    
+    _artist = artist;
+    _title = title;
+    _album = album;
+    _cover = cover;
+    _duration = duration;
+    _elapsed = elapsed;
+    
     // async cover loading
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
         UIImage *image = nil;
@@ -63,82 +85,63 @@ static RemoteControls *remoteControls = nil;
             // default named "no-image"
             image = [UIImage imageNamed:@"no-image"];
         }
+        
+        _image = image;
+        
         // check whether image is loaded
-        CGImageRef cgref = [image CGImage];
-        CIImage *cim = [image CIImage];
+        CGImageRef cgref = [_image CGImage];
+        CIImage *cim = [_image CIImage];
         if (cim != nil || cgref != NULL) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (NSClassFromString(@"MPNowPlayingInfoCenter")) {
-                    MPMediaItemArtwork *artwork = [[MPMediaItemArtwork alloc] initWithImage: image];
+                    MPMediaItemArtwork *artwork = [[MPMediaItemArtwork alloc] initWithImage: _image];
                     MPNowPlayingInfoCenter *center = [MPNowPlayingInfoCenter defaultCenter];
                     center.nowPlayingInfo = [NSDictionary dictionaryWithObjectsAndKeys:
-                        artist, MPMediaItemPropertyArtist,
-                        title, MPMediaItemPropertyTitle,
-                        album, MPMediaItemPropertyAlbumTitle,
-                        artwork, MPMediaItemPropertyArtwork,
-                        duration, MPMediaItemPropertyPlaybackDuration,
-                        elapsed, MPNowPlayingInfoPropertyElapsedPlaybackTime,
-                        [NSNumber numberWithInt:1], MPNowPlayingInfoPropertyPlaybackRate, nil];
+                                             artist, MPMediaItemPropertyArtist,
+                                             title, MPMediaItemPropertyTitle,
+                                             album, MPMediaItemPropertyAlbumTitle,
+                                             artwork, MPMediaItemPropertyArtwork,
+                                             duration, MPMediaItemPropertyPlaybackDuration,
+                                             elapsed, MPNowPlayingInfoPropertyElapsedPlaybackTime,
+                                             [NSNumber numberWithFloat:1.0f], MPNowPlayingInfoPropertyPlaybackRate, nil];
                 }
             });
         }
     });
 }
 
-
-- (void)receiveRemoteEvent:(NSNotification *)notification {
-    
-    UIEvent * receivedEvent = notification.object;
-
-    if (receivedEvent.type == UIEventTypeRemoteControl) {
-
-        NSString *subtype = @"other";
-
-        switch (receivedEvent.subtype) {
-
-            case UIEventSubtypeRemoteControlTogglePlayPause:
-                NSLog(@"playpause clicked.");
-                subtype = @"playpause";
-                break;
-
-            case UIEventSubtypeRemoteControlPlay:
-                NSLog(@"play clicked.");
-                subtype = @"play";
-                break;
-
-            case UIEventSubtypeRemoteControlPause:
-                NSLog(@"nowplaying pause clicked.");
-                subtype = @"pause";
-                break;
-
-            case UIEventSubtypeRemoteControlPreviousTrack:
-                //[self previousTrack: nil];
-                NSLog(@"prev clicked.");
-                subtype = @"prevTrack";
-                break;
-
-            case UIEventSubtypeRemoteControlNextTrack:
-                NSLog(@"next clicked.");
-                subtype = @"nextTrack";
-                //[self nextTrack: nil];
-                break;
-
-            default:
-                break;
-        }
-
-        NSDictionary *dict = @{@"subtype": subtype};
-        NSData *jsonData = [NSJSONSerialization dataWithJSONObject:dict options: 0 error: nil];
-        NSString *jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
-        NSString *jsStatement = [NSString stringWithFormat:@"if(window.remoteControls)remoteControls.receiveRemoteEvent(%@);", jsonString];
-
-#ifdef __CORDOVA_4_0_0
-        [self.webViewEngine evaluateJavaScript:jsStatement completionHandler:nil];
-#else
-        [self.webView stringByEvaluatingJavaScriptFromString:jsStatement];
-#endif
-        
+/**
+ * Send events if there is a registered event listener
+ */
+- (void)sendEvent:(NSString*)event
+{
+    if (self.callbackId != nil) {
+        CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:event];
+        [pluginResult setKeepCallback:[NSNumber numberWithBool:YES]];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:self.callbackId];
     }
+    
+    if ([event isEqual: @"pause"]) {
+        MPMediaItemArtwork *artwork = [[MPMediaItemArtwork alloc] initWithImage: _image];
+        MPNowPlayingInfoCenter *center = [MPNowPlayingInfoCenter defaultCenter];
+        center.nowPlayingInfo = [NSDictionary dictionaryWithObjectsAndKeys:
+                                 _artist, MPMediaItemPropertyArtist,
+                                 _title, MPMediaItemPropertyTitle,
+                                 _album, MPMediaItemPropertyAlbumTitle,
+                                 artwork, MPMediaItemPropertyArtwork,
+                                 [NSNumber numberWithFloat:0.0f], MPNowPlayingInfoPropertyPlaybackRate, nil];
+    }
+    
+    NSDictionary *dict = @{@"subtype": event};
+    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:dict options: 0 error: nil];
+    NSString *jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+    NSString *jsStatement = [NSString stringWithFormat:@"if(window.remoteControls)remoteControls.receiveRemoteEvent(%@);", jsonString];
+    
+#ifdef __CORDOVA_4_0_0
+    [self.webViewEngine evaluateJavaScript:jsStatement completionHandler:nil];
+#else
+    [self.webView stringByEvaluatingJavaScriptFromString:jsStatement];
+#endif
 }
 
 
