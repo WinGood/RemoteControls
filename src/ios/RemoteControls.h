@@ -13,9 +13,11 @@
 #import <MediaPlayer/MPMediaItem.h>
 
 @interface RemoteControls : CDVPlugin {
+    NSString *callbackId;
 }
 
+@property (nonatomic, copy) NSString *callbackId;
+
 - (void)updateMetas:(CDVInvokedUrlCommand*)command;
-- (void)receiveRemoteEvent:(NSNotification *)notification;
 
 @end
